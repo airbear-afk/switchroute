@@ -1,0 +1,927 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#14171c">
+<title>SwitchRoute</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass:wght@400;600;800&family=Overpass+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: full-bleed map; a bottom sheet with five tabs; a nav banner over the top while driving.
+   Type: Overpass descends from Highway Gothic, the lettering on US road signs. */
+:root{
+  --bg:#eef0ed; --panel:#ffffff; --panel-2:#e8ebe7; --fg:#1a1e23; --muted:#5a636c; --line:#d3d8d3;
+  --truck:#d98a00; --truck-ink:#1d1300; --car:#2463c8; --car-ink:#ffffff;
+  --sign:#f5c518; --sign-ink:#121212; --danger:#c3302a; --danger-ink:#fff; --ok:#1d7f46; --warn:#a85f00;
+  --shadow:0 -6px 24px rgba(20,24,30,.14);
+  --tile-filter:none;
+  --display:"Overpass","Arial Narrow",system-ui,sans-serif;
+  --mono:"Overpass Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1216; --panel:#171b21; --panel-2:#20252c; --fg:#e7e9eb; --muted:#97a0aa; --line:#2b323a;
+    --truck:#f2a516; --truck-ink:#1d1300; --car:#5b8ff0; --car-ink:#0b1424;
+    --sign:#f5c518; --sign-ink:#121212; --danger:#e5524a; --danger-ink:#fff; --ok:#3fbf75; --warn:#f0a336;
+    --shadow:0 -6px 24px rgba(0,0,0,.5);
+    --tile-filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.7);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1216; --panel:#171b21; --panel-2:#20252c; --fg:#e7e9eb; --muted:#97a0aa; --line:#2b323a;
+  --truck:#f2a516; --truck-ink:#1d1300; --car:#5b8ff0; --car-ink:#0b1424;
+  --sign:#f5c518; --sign-ink:#121212; --danger:#e5524a; --danger-ink:#fff; --ok:#3fbf75; --warn:#f0a336;
+  --shadow:0 -6px 24px rgba(0,0,0,.5);
+  --tile-filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.7);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:15px/1.45 var(--display);overflow:hidden;-webkit-tap-highlight-color:transparent}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--car);outline-offset:2px}
+#map{position:fixed;inset:0;z-index:0;background:var(--panel-2)}
+.leaflet-tile-pane{filter:var(--tile-filter)}
+.leaflet-control-attribution{font:11px var(--display)}
+.leaflet-top{top:env(safe-area-inset-top,0px)}
+.leaflet-right{right:env(safe-area-inset-right,0px)}
+
+/* Brand chip */
+.brand{position:fixed;z-index:500;top:calc(env(safe-area-inset-top,0px) + 10px);left:max(12px,env(safe-area-inset-left,0px));
+  display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:6px 10px 5px;
+  font-weight:800;letter-spacing:.02em;box-shadow:0 2px 10px rgba(0,0,0,.15)}
+.brand .dots{display:flex;gap:3px}
+.brand .dots i{width:9px;height:9px;border-radius:2px;display:block}
+.brand .dots i:first-child{background:var(--truck)}
+.brand .dots i:last-child{background:var(--car)}
+
+/* Bottom sheet */
+.sheet{position:fixed;z-index:600;left:0;right:0;bottom:0;background:var(--panel);border-top-left-radius:16px;border-top-right-radius:16px;
+  box-shadow:var(--shadow);display:flex;flex-direction:column;height:52vh;transition:height .22s ease;
+  padding-bottom:env(safe-area-inset-bottom,0px)}
+.sheet.min{height:calc(96px + env(safe-area-inset-bottom,0px))}
+.sheet.full{height:88vh}
+@media (prefers-reduced-motion:reduce){.sheet{transition:none}}
+.handle{border:0;background:none;padding:8px 0 2px;display:flex;justify-content:center}
+.handle span{width:44px;height:5px;border-radius:3px;background:var(--line)}
+.tabs{display:flex;gap:4px;padding:4px max(12px,env(safe-area-inset-right,0px)) 8px max(12px,env(safe-area-inset-left,0px));border-bottom:1px solid var(--line);overflow-x:auto}
+.tabs button{flex:1 0 auto;border:0;background:none;padding:8px 10px;border-radius:8px;font-weight:600;color:var(--muted);font-size:14px}
+.tabs button[aria-selected="true"]{background:var(--panel-2);color:var(--fg)}
+.panel{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-block:12px 28px;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.panel[hidden]{display:none}
+.panel > * + *{margin-top:14px}
+
+h2{font-size:13px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0;font-weight:800}
+p{margin:0}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+.btn{border:1px solid var(--line);background:var(--panel-2);border-radius:10px;padding:9px 13px;font-weight:600;min-height:42px}
+.btn.primary{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.btn.truck{background:var(--truck);color:var(--truck-ink);border-color:var(--truck)}
+.btn.danger{background:var(--danger);color:var(--danger-ink);border-color:var(--danger)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.sm{min-height:34px;padding:5px 10px;font-size:13px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.row > .grow{flex:1;min-width:0}
+input[type=text],input[type=password],input[type=number],input[type=search],textarea{
+  width:100%;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-height:44px}
+textarea{min-height:70px;resize:vertical}
+label.f{display:grid;gap:4px;font-size:13px;color:var(--muted);font-weight:600}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.callout{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel-2)}
+.callout > * + *{margin-top:8px}
+
+/* Summary strip */
+.sum{display:flex;gap:14px;flex-wrap:wrap;align-items:baseline}
+.sum b{font-size:24px;font-weight:800}
+.bar{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--panel-2);flex-basis:100%}
+.bar i{display:block}
+.bar .t{background:var(--truck)} .bar .c{background:var(--car)}
+
+/* Itinerary */
+.itin{list-style:none;margin:0;padding:0}
+.stop{display:grid;grid-template-columns:34px 1fr auto;gap:10px;align-items:start;padding:10px 0}
+.pin{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-weight:800;background:var(--fg);color:var(--bg);font-size:14px}
+.pin.park{background:var(--sign);color:var(--sign-ink);border-radius:6px}
+.stopmain{min-width:0}
+.lbl{font-weight:600;overflow-wrap:anywhere}
+.tags{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px}
+.tag{font-size:12px;font-weight:700;padding:2px 7px;border-radius:5px;background:var(--panel-2);letter-spacing:.02em}
+.tag.park{background:var(--sign);color:var(--sign-ink)}
+.note{margin-top:6px;font-size:13px;border-left:3px solid var(--sign);padding:2px 0 2px 8px;overflow-wrap:anywhere}
+.stopbtns{display:flex;gap:2px}
+.icon{border:0;background:none;width:34px;height:34px;border-radius:8px;color:var(--muted);font-size:16px}
+.icon:hover{background:var(--panel-2)}
+.stopacts{grid-column:2/4;display:flex;gap:6px;flex-wrap:wrap}
+
+.leg{margin-left:14px;border-left:4px solid var(--line);padding:8px 0 10px 22px}
+.leg.truck{border-left-color:var(--truck)}
+.leg.car{border-left-color:var(--car)}
+.leg > * + *{margin-top:8px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.seg button{border:0;background:var(--bg);padding:6px 14px;font-weight:700;font-size:13px;letter-spacing:.04em;text-transform:uppercase;min-height:34px}
+.seg button[aria-pressed="true"].tm{background:var(--truck);color:var(--truck-ink)}
+.seg button[aria-pressed="true"].cm{background:var(--car);color:var(--car-ink)}
+.legmeta{font-size:13px;color:var(--muted)}
+.warn{font-size:13px;border-radius:9px;padding:8px 10px;background:var(--panel-2);border:1px solid var(--line)}
+.warn.bad{border-color:var(--danger)}
+.warn.mid{border-color:var(--warn)}
+.warn strong{display:block}
+.warn .row{margin-top:6px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:5px;font-family:var(--mono);font-size:12px;font-weight:700;border-radius:6px;padding:3px 7px;background:var(--sign);color:var(--sign-ink);border:0}
+.chip.low{background:var(--danger);color:var(--danger-ink)}
+.chip.tight{outline:2px solid var(--warn);outline-offset:-2px}
+a.ext{color:var(--car);font-size:13px;font-weight:600}
+
+/* Search */
+.search{position:relative}
+.results{list-style:none;margin:6px 0 0;padding:0;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.results li button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);background:var(--panel);padding:10px 12px;font-size:14px}
+.results li:last-child button{border-bottom:0}
+
+/* Lists */
+.list{list-style:none;margin:0;padding:0}
+.list > li{padding:10px 0;border-bottom:1px solid var(--line)}
+.list > li:last-child{border-bottom:0}
+.kv{display:flex;justify-content:space-between;gap:10px}
+
+/* Clearance marker (low-clearance sign) */
+.clr{width:auto!important;height:auto!important;background:none;border:0}
+.clr span{display:block;transform:translate(-50%,-50%);font:700 11px/1 var(--mono);padding:4px 5px 3px;border:2px solid #111;border-radius:4px;background:var(--sign);color:var(--sign-ink);white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.clr.low span{background:#d93a2f;color:#fff}
+.clr.tight span{background:#ff9c1a}
+.clr.v span::after{content:" ✓"}
+.stoppin{width:auto!important;height:auto!important;background:none;border:0}
+.stoppin span{display:grid;place-items:center;width:28px;height:28px;transform:translate(-50%,-100%);border-radius:50% 50% 50% 0;rotate:-45deg;background:#1a1e23;border:2px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.stoppin span b{rotate:45deg;color:#fff;font:800 13px var(--display)}
+.stoppin.park span{background:#f5c518;border-color:#111}
+.stoppin.park span b{color:#111}
+.parkpoi span{display:block;transform:translate(-50%,-50%);background:#2463c8;color:#fff;font:800 12px var(--display);width:22px;height:22px;border-radius:5px;display:grid;place-items:center;border:2px solid #fff}
+.me span{display:block;width:20px;height:20px;transform:translate(-50%,-50%);border-radius:50%;background:#2a7fff;border:3px solid #fff;box-shadow:0 0 0 6px rgba(42,127,255,.25)}
+.leaflet-popup-content{font:14px/1.4 var(--display);margin:12px 14px}
+.leaflet-popup-content .row{margin-top:8px}
+.leaflet-popup-content .btn{min-height:34px;padding:5px 10px;font-size:13px;color:#1a1e23;background:#eef0ed;border-color:#ccc}
+
+/* Navigation overlay */
+.navtop{position:fixed;z-index:700;top:calc(env(safe-area-inset-top,0px) + 8px);left:max(8px,env(safe-area-inset-left,0px));right:max(8px,env(safe-area-inset-right,0px));
+  background:#11161c;color:#fff;border-radius:14px;padding:12px 14px;display:grid;grid-template-columns:52px 1fr;gap:12px;align-items:center;box-shadow:0 6px 20px rgba(0,0,0,.4)}
+.navtop.truck{border-bottom:5px solid #f2a516}
+.navtop.car{border-bottom:5px solid #5b8ff0}
+.navtop .arrow{font-size:38px;line-height:1;text-align:center}
+.navtop .dist{font:800 26px/1 var(--display)}
+.navtop .instr{font-size:16px;font-weight:600;margin-top:3px;overflow-wrap:anywhere}
+.navtop .mode{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:#b9c2cc;margin-top:4px}
+.navbot{position:fixed;z-index:700;left:0;right:0;bottom:0;background:var(--panel);box-shadow:var(--shadow);
+  padding-block:12px calc(12px + env(safe-area-inset-bottom,0px));padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.navbot .grow{flex:1;min-width:0}
+.navbot b{font-size:20px}
+.arrival{position:fixed;z-index:800;left:max(12px,env(safe-area-inset-left,0px));right:max(12px,env(safe-area-inset-right,0px));bottom:calc(90px + env(safe-area-inset-bottom,0px));
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:var(--shadow)}
+.arrival > * + *{margin-top:10px}
+
+.toast{position:fixed;z-index:900;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top,0px) + 60px);background:#11161c;color:#fff;
+  padding:10px 14px;border-radius:10px;font-size:14px;max-width:min(92vw,460px);box-shadow:0 4px 16px rgba(0,0,0,.35)}
+.picking{position:fixed;z-index:650;top:calc(env(safe-area-inset-top,0px) + 56px);left:50%;transform:translateX(-50%);background:var(--sign);color:var(--sign-ink);
+  font-weight:800;padding:8px 14px;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.3);display:flex;gap:10px;align-items:center;max-width:92vw}
+.picking button{border:0;background:#111;color:#fff;border-radius:7px;padding:4px 10px;font-weight:700}
+</style>
+</head>
+<body>
+<div id="map" aria-label="Map"></div>
+<div class="brand"><span class="dots"><i></i><i></i></span>SwitchRoute</div>
+<div class="picking" id="picking" hidden><span id="pickingText">Tap the map</span><button data-act="cancelPick">Cancel</button></div>
+
+<section class="sheet" id="sheet" aria-label="Trip panel">
+  <button class="handle" data-act="sheet" aria-label="Resize panel"><span></span></button>
+  <nav class="tabs" role="tablist">
+    <button role="tab" data-tab="route" aria-selected="true">Route</button>
+    <button role="tab" data-tab="rig" aria-selected="false">Rig</button>
+    <button role="tab" data-tab="clear" aria-selected="false">Clearances</button>
+    <button role="tab" data-tab="log" aria-selected="false">Log</button>
+    <button role="tab" data-tab="settings" aria-selected="false">Settings</button>
+  </nav>
+  <div class="panel" id="p-route"></div>
+  <div class="panel" id="p-rig" hidden></div>
+  <div class="panel" id="p-clear" hidden></div>
+  <div class="panel" id="p-log" hidden></div>
+  <div class="panel" id="p-settings" hidden></div>
+</section>
+
+<div class="navtop" id="navtop" hidden>
+  <div class="arrow" id="navArrow">↑</div>
+  <div><div class="dist num" id="navDist">—</div><div class="instr" id="navInstr">Getting your location…</div><div class="mode" id="navMode"></div></div>
+</div>
+<div class="navbot" id="navbot" hidden>
+  <div class="grow"><b class="num" id="navRemain">—</b> <span class="muted small" id="navEta"></span></div>
+  <button class="btn sm" data-act="recenter">Recenter</button>
+  <button class="btn sm" data-act="mute" id="muteBtn">Voice on</button>
+  <button class="btn sm danger" data-act="endNav">End</button>
+</div>
+<div class="arrival" id="arrival" hidden></div>
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+"use strict";
+/* ============ Storage ============ */
+const LS = "switchroute.v1";
+const DEFAULTS = {
+  key: "",
+  vehicle: { name: "My rig", heightIn: 162, weightLb: 80000, lengthFt: 75, widthIn: 102, axleLb: 34000, hazmat: false },
+  stops: [], legs: [], clearances: [], osm: {}, notes: [], log: [],
+  settings: { voice: true, rate: "" }
+};
+let S = load();
+function load(){
+  try{ const j = JSON.parse(localStorage.getItem(LS) || "null");
+    if (j){ const d = structuredClone(DEFAULTS); for (const k in d) if (j[k] !== undefined) d[k] = j[k];
+      d.vehicle = Object.assign(structuredClone(DEFAULTS.vehicle), j.vehicle||{});
+      d.settings = Object.assign(structuredClone(DEFAULTS.settings), j.settings||{});
+      d.legs.forEach(l => { l.busy = false; });
+      return d; }
+  }catch(e){}
+  return structuredClone(DEFAULTS);
+}
+let saveT;
+function save(){ clearTimeout(saveT); saveT = setTimeout(() => {
+  try{ localStorage.setItem(LS, JSON.stringify(S)); }catch(e){ toast("Couldn't save on this device. Storage may be full or blocked."); }
+}, 150); }
+
+/* ============ Helpers ============ */
+const $ = s => document.querySelector(s);
+const uid = () => Math.random().toString(36).slice(2, 10);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const R = 6371000;
+function hav(a, b){ const t = Math.PI/180, dLa=(b[0]-a[0])*t, dLo=(b[1]-a[1])*t;
+  const x = Math.sin(dLa/2)**2 + Math.cos(a[0]*t)*Math.cos(b[0]*t)*Math.sin(dLo/2)**2; return 2*R*Math.asin(Math.sqrt(x)); }
+function distToLine(p, C){ // meters, approximate
+  let best = Infinity; const t = Math.PI/180, k = Math.cos(p[0]*t);
+  for (let i=0;i<C.length-1;i++){
+    const ax=(C[i][1]-p[1])*k, ay=C[i][0]-p[0], bx=(C[i+1][1]-p[1])*k, by=C[i+1][0]-p[0];
+    const dx=bx-ax, dy=by-ay, L=dx*dx+dy*dy; let u = L ? -(ax*dx+ay*dy)/L : 0; u=Math.max(0,Math.min(1,u));
+    const x=ax+u*dx, y=ay+u*dy, d=Math.sqrt(x*x+y*y)*111320; if (d<best) best=d;
+  }
+  return best;
+}
+const ftIn = inches => { if (inches==null||isNaN(inches)) return "?"; const t=Math.round(inches); return `${Math.floor(t/12)}'${t%12}"`; };
+function fmtMi(mi){ if (mi < 0.19) return `${Math.max(10, Math.round(mi*5280/10)*10)} ft`; return `${mi < 10 ? mi.toFixed(1) : Math.round(mi)} mi`; }
+function fmtDur(s){ const m = Math.round(s/60); if (m < 60) return `${m} min`; return `${Math.floor(m/60)} hr ${m%60} min`; }
+const M2MI = 1/1609.344;
+function letter(i){ return i < 26 ? String.fromCharCode(65+i) : String(i+1); }
+function stopById(id){ return S.stops.find(s => s.id === id); }
+let toastT;
+function toast(msg, ms=3800){ const t=$("#toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastT); toastT=setTimeout(()=>t.hidden=true, ms); }
+function parseMaxheight(raw){
+  if (!raw) return null; const s = String(raw).trim().toLowerCase();
+  if (/none|default|no_sign|no_indications|unsigned/.test(s)) return null;
+  const ft = s.match(/(\d+(?:\.\d+)?)\s*(?:'|ft|feet|’)\s*(?:(\d+(?:\.\d+)?)\s*(?:"|in|inch|inches|”)?)?/);
+  if (ft) return parseFloat(ft[1])*12 + (ft[2] ? parseFloat(ft[2]) : 0);
+  const m = s.match(/^(\d+(?:\.\d+)?)\s*(?:m|meters?)?$/);
+  if (m) return parseFloat(m[1]) / 0.0254;
+  const n = parseFloat(s); return isNaN(n) ? null : n/0.0254;
+}
+
+/* ============ Map ============ */
+const map = L.map("map", { zoomControl: false, attributionControl: true }).setView([34.06, -117.4], 10);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19,
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors · Routing <a href="https://openrouteservice.org">openrouteservice</a>' }).addTo(map);
+L.control.zoom({ position: "topright" }).addTo(map);
+const layers = { route: L.layerGroup().addTo(map), stops: L.layerGroup().addTo(map), clear: L.layerGroup().addTo(map), park: L.layerGroup().addTo(map), nav: L.layerGroup().addTo(map) };
+function cssVar(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+let pick = null; // {kind:'report'|'stop'}
+map.on("click", e => {
+  if (!pick) return;
+  const p = [e.latlng.lat, e.latlng.lng];
+  if (pick.kind === "report"){ openReport(p); }
+  endPick();
+});
+map.on("contextmenu", e => {
+  const lat=e.latlng.lat, lng=e.latlng.lng;
+  L.popup().setLatLng(e.latlng).setContent(
+    `<b>${lat.toFixed(5)}, ${lng.toFixed(5)}</b><div class="row"><button class="btn" data-act="addHere" data-lat="${lat}" data-lng="${lng}">Add stop here</button><button class="btn" data-act="reportHere" data-lat="${lat}" data-lng="${lng}">Report clearance</button></div>`
+  ).openOn(map);
+});
+function startPick(kind, text){ pick = {kind}; $("#pickingText").textContent = text; $("#picking").hidden = false; setSheet("min"); }
+function endPick(){ pick = null; $("#picking").hidden = true; }
+
+/* ============ ORS + Overpass ============ */
+const ORS = "https://api.openrouteservice.org";
+function orsError(j, status){
+  const code = j?.error?.code; const msg = j?.error?.message || (typeof j?.error === "string" ? j.error : "");
+  if (status === 401 || status === 403) return "Your OpenRouteService key was rejected. Check it in Settings.";
+  if (status === 429) return "Hit the free routing limit for now. Wait a minute and tap Retry.";
+  if (code === 2010 || /routable point/i.test(msg)) return "No road this vehicle can use was found near one of these stops. Try Car mode for this leg, or a park & switch stop.";
+  if (code === 2009 || /could not be found|not found/i.test(msg)) return "No route found with your rig's limits. Try Car mode, or check the rig size.";
+  if (code === 2004 || /distance/i.test(msg)) return "This leg is longer than the free routing service allows. Add a stop in between.";
+  return msg || `Routing failed (error ${status}).`;
+}
+function restrictions(){ const v=S.vehicle; const r={};
+  if (v.heightIn) r.height = +(v.heightIn*0.0254).toFixed(2);
+  if (v.weightLb) r.weight = +(v.weightLb*0.000453592).toFixed(1);
+  if (v.lengthFt) r.length = +(v.lengthFt*0.3048).toFixed(1);
+  if (v.widthIn) r.width = +(v.widthIn*0.0254).toFixed(2);
+  if (v.axleLb) r.axleload = +(v.axleLb*0.000453592).toFixed(1);
+  if (v.hazmat) r.hazmat = true; return r; }
+function avoidPolys(){ // your reported clearances that are too low for the rig
+  const lim = (S.vehicle.heightIn||0) + 3; const polys = [];
+  for (const c of S.clearances){ if (c.heightIn != null && c.heightIn < lim){
+      const d=0.0003, dl=d/Math.cos(c.lat*Math.PI/180);
+      polys.push([[[c.lng-dl,c.lat-d],[c.lng+dl,c.lat-d],[c.lng+dl,c.lat+d],[c.lng-dl,c.lat+d],[c.lng-dl,c.lat-d]]]); } }
+  return polys.length ? { type: "MultiPolygon", coordinates: polys } : null;
+}
+async function orsRoute(coords, mode){
+  const profile = mode === "truck" ? "driving-hgv" : "driving-car";
+  const body = { coordinates: coords, instructions: true, units: "mi", radiuses: coords.map(() => 500) };
+  const opts = {};
+  if (mode === "truck"){ opts.vehicle_type = "hgv"; opts.profile_params = { restrictions: restrictions() };
+    const av = avoidPolys(); if (av) opts.avoid_polygons = av; }
+  if (Object.keys(opts).length) body.options = opts;
+  let r; try{
+    r = await fetch(`${ORS}/v2/directions/${profile}/geojson`, { method: "POST",
+      headers: { "Authorization": S.key, "Content-Type": "application/json", "Accept": "application/json, application/geo+json" }, body: JSON.stringify(body) });
+  }catch(e){ throw new Error("Couldn't reach the routing service. Check your connection."); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.features) throw new Error(orsError(j, r.status));
+  return j.features[0];
+}
+function packRoute(f){
+  const c = f.geometry.coordinates.map(x => [x[1], x[0]]);
+  const sm = f.properties.summary || {};
+  const st = (f.properties.segments||[]).flatMap(s => s.steps||[]).map(s => ({ t: s.instruction, mi: s.distance, s: s.duration, w: s.way_points[0], e: s.way_points[1], type: s.type, n: s.name }));
+  return { c, mi: sm.distance || 0, s: sm.duration || 0, st };
+}
+async function geocode(text){
+  const c = map.getCenter();
+  const u = `${ORS}/geocode/autocomplete?api_key=${encodeURIComponent(S.key)}&text=${encodeURIComponent(text)}&boundary.country=US&focus.point.lat=${c.lat}&focus.point.lon=${c.lng}`;
+  const r = await fetch(u); if (!r.ok) throw new Error(orsError(await r.json().catch(()=>({})), r.status));
+  const j = await r.json(); return (j.features||[]).map(f => ({ label: f.properties.label, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] }));
+}
+async function reverse(lat, lng){
+  try{ const r = await fetch(`${ORS}/geocode/reverse?api_key=${encodeURIComponent(S.key)}&point.lat=${lat}&point.lon=${lng}&size=1`);
+    const j = await r.json(); return j.features?.[0]?.properties?.label || null; }catch(e){ return null; }
+}
+let opChain = Promise.resolve();
+function overpass(q){ // one request at a time: the public server allows few concurrent requests
+  const run = async () => {
+    const r = await fetch("https://overpass-api.de/api/interpreter", { method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "data=" + encodeURIComponent(q) });
+    if (!r.ok) throw new Error("Map data server is busy. Try again in a minute.");
+    return r.json();
+  };
+  const p = opChain.then(run, run); opChain = p.catch(() => {}); return p;
+}
+const elPt = el => el.center ? [el.center.lat, el.center.lon] : [el.lat, el.lon];
+
+/* ============ Legs ============ */
+function syncLegs(){
+  const old = S.legs, legs = [];
+  for (let i=0;i<S.stops.length-1;i++){
+    const a=S.stops[i], b=S.stops[i+1];
+    const prev = old.find(l => l.from===a.id && l.to===b.id);
+    if (prev){ legs.push(prev); continue; }
+    const mode = a.park ? "car" : (legs[i-1]?.mode || "truck");
+    legs.push({ from:a.id, to:b.id, mode, route:null, warn:null, clear:null, err:null });
+  }
+  S.legs = legs;
+}
+function invalidate(leg){ leg.route=null; leg.warn=null; leg.clear=null; leg.err=null; }
+let routing=false, queued=false;
+async function routeAll(){
+  syncLegs(); save(); drawStops(); renderRoute();
+  if (!S.key) return;
+  if (routing){ queued=true; return; }
+  routing = true; let any=false;
+  try{
+    for (const leg of S.legs){
+      if (leg.route || leg.err || !S.legs.includes(leg)) continue;
+      const a=stopById(leg.from), b=stopById(leg.to); if (!a||!b) continue;
+      leg.busy=true; renderRoute(); any=true;
+      try{ leg.route = packRoute(await orsRoute([[a.lng,a.lat],[b.lng,b.lat]], leg.mode)); leg.err=null; }
+      catch(e){ leg.err = e.message; }
+      leg.busy=false; save(); drawRoutes(); renderRoute();
+      if (leg.route && leg.mode === "truck") checkLeg(leg);
+    }
+  } finally { routing=false; }
+  if (queued){ queued=false; return routeAll(); }
+  if (any) fitAll();
+}
+async function checkLeg(leg){
+  const b = stopById(leg.to); if (!b || !leg.route) return;
+  leg.checking = true; renderRoute();
+  const warn = [];
+  const end = leg.route.c[leg.route.c.length-1];
+  const gap = hav(end, [b.lat,b.lng]);
+  if (gap > 150) warn.push({ k:"gap", lvl:"bad", t:`The truck route stops ${fmtMi(gap*M2MI)} short of this stop.`, d:"Trucks may not be allowed on the last street. Consider parking the rig and finishing by car.", sw:true });
+  try{
+    const q = `[out:json][timeout:20];(way(around:70,${b.lat},${b.lng})["hgv"~"^(no|destination|delivery|discouraged)$"];way(around:70,${b.lat},${b.lng})["maxheight"];way(around:70,${b.lat},${b.lng})["maxweight"];way(around:70,${b.lat},${b.lng})["maxlength"];node(around:150,${b.lat},${b.lng})["noexit"="yes"];way(around:150,${b.lat},${b.lng})["noexit"="yes"];node(around:150,${b.lat},${b.lng})["highway"~"^(turning_circle|turning_loop)$"];);out tags center;`;
+    const j = await overpass(q); const els = j.elements||[];
+    const no = els.filter(e => e.tags?.hgv === "no" || e.tags?.hgv === "discouraged");
+    const loc = els.filter(e => e.tags?.hgv === "destination" || e.tags?.hgv === "delivery");
+    const v=S.vehicle;
+    const lowH = els.filter(e => { const h=parseMaxheight(e.tags?.maxheight); return h!=null && v.heightIn && h < v.heightIn; });
+    const lowW = els.filter(e => { const w=parseFloat(e.tags?.maxweight); return !isNaN(w) && v.weightLb && (/lb|lbs/.test(e.tags.maxweight) ? w : /st/.test(e.tags.maxweight) ? w*2000 : w*2204.6) < v.weightLb; });
+    const noexit = els.some(e => e.tags?.noexit === "yes"), turn = els.some(e => /turning/.test(e.tags?.highway||""));
+    if (no.length) warn.push({ k:"no", lvl:"bad", t:`Trucks are posted "no trucks" on ${esc(no[0].tags.name || "a street")} next to this stop.`, d:"Plan to park the rig nearby and finish by car.", sw:true });
+    if (lowH.length) warn.push({ k:"h", lvl:"bad", t:`A street at this stop has a ${ftIn(parseMaxheight(lowH[0].tags.maxheight))} height limit, below your rig.`, d:"", sw:true });
+    if (lowW.length) warn.push({ k:"w", lvl:"bad", t:`A street at this stop has a weight limit below your rig (${esc(lowW[0].tags.maxweight)}).`, d:"", sw:true });
+    if (loc.length && !no.length) warn.push({ k:"loc", lvl:"mid", t:`${esc(loc[0].tags.name || "The street here")} allows trucks for local delivery only.`, d:"Fine for a drop-off here. Don't use it as a through route." });
+    if (noexit && !turn) warn.push({ k:"dead", lvl:"mid", t:"Possible dead end near this stop with no mapped turnaround.", d:"Check before you pull in. You may need to back out." });
+  }catch(e){ warn.push({ k:"err", lvl:"", t:"Couldn't check the street rules at this stop.", d:e.message }); }
+  if (S.legs.includes(leg)) leg.warn = warn;
+  // clearances along the route
+  try{ await scanClearances(leg); }catch(e){}
+  leg.checking=false; save(); renderRoute(); renderClear(); drawClear();
+}
+async function scanClearances(leg){
+  const C = leg.route.c; const step = Math.max(1, Math.ceil(C.length/280));
+  const pts=[]; for (let i=0;i<C.length;i+=step) pts.push(C[i]); pts.push(C[C.length-1]);
+  const line = pts.map(p => `${p[0].toFixed(5)},${p[1].toFixed(5)}`).join(",");
+  const j = await overpass(`[out:json][timeout:30];(way(around:35,${line})["maxheight"];node(around:35,${line})["maxheight"];);out tags center;`);
+  const keys=[];
+  for (const el of j.elements||[]){
+    const h = parseMaxheight(el.tags.maxheight); if (h==null) continue;
+    const key = el.type[0]+el.id; const p = elPt(el);
+    S.osm[key] = { lat:p[0], lng:p[1], in:h, raw:el.tags.maxheight, name: el.tags.name || "" };
+    keys.push(key);
+  }
+  for (const c of S.clearances) if (!c.osm && distToLine([c.lat,c.lng], C) < 35) keys.push("u:"+c.id);
+  leg.clear = [...new Set(keys)];
+}
+function clearInfo(key){ // effective height + reliability
+  if (key.startsWith("u:")){ const c=S.clearances.find(x=>x.id===key.slice(2)); if (!c) return null;
+    return { key, lat:c.lat, lng:c.lng, in:c.heightIn, raw:null, rel:"Your report", relLvl:2, date:c.date, note:c.note, own:c }; }
+  const o=S.osm[key]; if (!o) return null;
+  const rec = S.clearances.find(x => x.osm === key);
+  if (rec) return { key, lat:o.lat, lng:o.lng, in:rec.heightIn, raw:o.raw, mapIn:o.in, rel: rec.kind==="confirm" ? "Confirmed by you" : "Your correction", relLvl:2, date:rec.date, note:rec.note, own:rec, name:o.name };
+  return { key, lat:o.lat, lng:o.lng, in:o.in, raw:o.raw, rel:"Map data only", relLvl:0, name:o.name };
+}
+function clearLevel(inches){ const v=S.vehicle.heightIn||0; if (!v) return ""; if (inches < v) return "low"; if (inches < v+12) return "tight"; return ""; }
+
+/* ============ Drawing ============ */
+function drawStops(){
+  layers.stops.clearLayers();
+  S.stops.forEach((s,i) => {
+    L.marker([s.lat,s.lng], { icon: L.divIcon({ className:"stoppin"+(s.park?" park":""), html:`<span><b>${s.park?"P":letter(i)}</b></span>` }) })
+      .bindPopup(`<b>${letter(i)}. ${esc(s.label)}</b>${s.park?"<br>Park the rig here, continue by car.":""}`).addTo(layers.stops);
+  });
+}
+function drawRoutes(){
+  layers.route.clearLayers();
+  const tc=cssVar("--truck"), cc=cssVar("--car");
+  for (const leg of S.legs){ if (!leg.route) continue;
+    L.polyline(leg.route.c, { color:"#000", weight:9, opacity:.35 }).addTo(layers.route);
+    L.polyline(leg.route.c, { color: leg.mode==="truck"?tc:cc, weight:6, opacity:.95, dashArray: leg.mode==="car" ? "1 10" : null, lineCap:"round" }).addTo(layers.route);
+  }
+}
+function allClearKeys(){ const s=new Set(); S.legs.forEach(l => (l.clear||[]).forEach(k=>s.add(k))); S.clearances.forEach(c => s.add(c.osm || "u:"+c.id)); return [...s]; }
+function drawClear(){
+  layers.clear.clearLayers();
+  for (const key of allClearKeys()){
+    const c = clearInfo(key); if (!c) continue;
+    const cls = ["clr", clearLevel(c.in), c.relLvl ? "v" : ""].join(" ");
+    L.marker([c.lat,c.lng], { icon: L.divIcon({ className: cls, html:`<span>${ftIn(c.in)}</span>` }), zIndexOffset: 500 })
+      .bindPopup(() => clearPopup(key)).addTo(layers.clear);
+  }
+}
+function clearPopup(key){
+  const c = clearInfo(key); if (!c) return "Removed";
+  const lvl = clearLevel(c.in);
+  return `<b>Clearance ${ftIn(c.in)}</b>${c.name?` · ${esc(c.name)}`:""}<br>
+    <span>${esc(c.rel)}${c.date?` · ${new Date(c.date).toLocaleDateString()}`:""}</span>
+    ${c.mapIn!=null && Math.abs(c.mapIn-c.in)>0.5 ? `<br>Map data says ${ftIn(c.mapIn)}`:""}
+    ${lvl==="low"?`<br><b style="color:#c3302a">Lower than your rig (${ftIn(S.vehicle.heightIn)})</b>`: lvl==="tight"?`<br><b>Within a foot of your rig height</b>`:""}
+    ${c.note?`<br><i>${esc(c.note)}</i>`:""}
+    <div class="row">${key.startsWith("u:")?"":`<button class="btn" data-act="confirmClr" data-key="${key}">Sign matches</button>`}
+    <button class="btn" data-act="correctClr" data-key="${key}">${key.startsWith("u:")?"Edit":"Sign says different"}</button>
+    ${c.own?`<button class="btn" data-act="delClr" data-id="${c.own.id}">Remove mine</button>`:""}</div>`;
+}
+function fitAll(){
+  const pts = S.stops.map(s => [s.lat,s.lng]); S.legs.forEach(l => l.route && pts.push(...l.route.c.filter((_,i)=>i%20===0)));
+  if (!pts.length) return;
+  const sheetH = $("#sheet").getBoundingClientRect().height;
+  if (pts.length === 1) map.setView(pts[0], 14); else map.fitBounds(pts, { paddingTopLeft:[30,70], paddingBottomRight:[30, sheetH+20] });
+}
+
+/* ============ Sheet + tabs ============ */
+let tab = "route";
+function setSheet(s){ const el=$("#sheet"); el.classList.remove("min","full"); if (s!=="half") el.classList.add(s); }
+function cycleSheet(){ const el=$("#sheet"); if (el.classList.contains("min")) setSheet("half"); else if (el.classList.contains("full")) setSheet("min"); else setSheet("full"); }
+function showTab(t){ tab=t; document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===t));
+  ["route","rig","clear","log","settings"].forEach(n => $("#p-"+n).hidden = n!==t);
+  if ($("#sheet").classList.contains("min")) setSheet("half");
+  render(t); }
+function render(t){ ({ route:renderRoute, rig:renderRig, clear:renderClear, log:renderLog, settings:renderSettings })[t](); }
+function renderAll(){ render(tab); }
+
+/* ============ Route tab ============ */
+let results = [], searchQ = "";
+function noteFor(s){ return S.notes.find(n => hav([n.lat,n.lng],[s.lat,s.lng]) < 75); }
+function renderRoute(){
+  if (tab !== "route") return;
+  const el = $("#p-route"); const hadFocus = document.activeElement?.id === "search";
+  const legs = S.legs, done = legs.length && legs.every(l => l.route);
+  const tMi = legs.filter(l=>l.mode==="truck"&&l.route).reduce((a,l)=>a+l.route.mi,0);
+  const cMi = legs.filter(l=>l.mode==="car"&&l.route).reduce((a,l)=>a+l.route.mi,0);
+  const sec = legs.reduce((a,l)=>a+(l.route?.s||0),0);
+  let h = "";
+  if (!S.key) h += `<div class="callout"><h2>One-time setup</h2><p>Routing uses a free OpenRouteService key. Sign up at <a class="ext" href="https://openrouteservice.org/dev/#/signup" target="_blank" rel="noopener">openrouteservice.org</a>, copy your key, and paste it here.</p>
+    <div class="row"><input class="grow" type="password" id="keyInline" placeholder="Paste your API key" autocomplete="off"><button class="btn primary" data-act="saveKeyInline">Save</button></div></div>`;
+  if (legs.length) h += `<div class="sum"><span><b class="num">${(tMi+cMi).toFixed(1)}</b> mi</span><span class="muted">${sec?fmtDur(sec):""}</span>
+    <span class="small"><span style="color:var(--truck);font-weight:800">■</span> Truck ${tMi.toFixed(1)} mi &nbsp; <span style="color:var(--car);font-weight:800">■</span> Car ${cMi.toFixed(1)} mi</span>
+    <div class="bar"><i class="t" style="width:${tMi+cMi? tMi/(tMi+cMi)*100:0}%"></i><i class="c" style="width:${tMi+cMi? cMi/(tMi+cMi)*100:0}%"></i></div></div>`;
+  h += `<ol class="itin">`;
+  S.stops.forEach((s,i) => {
+    const n = noteFor(s), last = i===S.stops.length-1;
+    h += `<li class="stop"><span class="pin ${s.park?"park":""}">${s.park?"P":letter(i)}</span>
+      <div class="stopmain"><div class="lbl">${esc(s.label)}</div>
+        ${s.park?`<div class="tags"><span class="tag park">PARK RIG · SWITCH TO CAR</span></div>`:""}
+        ${n && editingNote!==s.id ? `<div class="note">${esc(n.text)}</div>`:""}
+        ${editingNote===s.id ? `<div style="margin-top:8px"><textarea id="noteText" placeholder="Gate code, which dock, where trucks enter…">${esc(n?.text||"")}</textarea>
+          <div class="row" style="margin-top:6px"><button class="btn sm primary" data-act="saveNote" data-id="${s.id}">Save note</button><button class="btn sm" data-act="cancelNote">Cancel</button>${n?`<button class="btn sm" data-act="delNote" data-id="${s.id}">Delete note</button>`:""}</div></div>`:""}
+      </div>
+      <div class="stopbtns"><button class="icon" data-act="up" data-i="${i}" aria-label="Move up" ${i===0?"disabled":""}>↑</button><button class="icon" data-act="down" data-i="${i}" aria-label="Move down" ${last?"disabled":""}>↓</button><button class="icon" data-act="rm" data-i="${i}" aria-label="Remove stop">✕</button></div>
+      <div class="stopacts">${!last?`<button class="btn sm" data-act="park" data-i="${i}">${s.park?"Keep rig here: off":"Park rig here"}</button>`:""}
+        <button class="btn sm" data-act="note" data-id="${s.id}">${n?"Edit note":"Add note"}</button>
+        ${!last && !s.park ? `<button class="btn sm" data-act="findPark" data-i="${i+1}">Truck parking near ${letter(i+1)}</button>`:""}</div>
+    </li>`;
+    if (!last) h += legHtml(i);
+  });
+  h += `</ol>`;
+  h += `<div class="search"><h2 style="margin-bottom:6px">${S.stops.length? "Add a stop":"Where are you starting?"}</h2>
+    <div class="row"><input class="grow" type="search" id="search" placeholder="Address or place" value="${esc(searchQ)}" autocomplete="off" ${S.key?"":"disabled"}>
+    <button class="btn sm" data-act="myLoc">${S.stops.length?"Start at my location":"My location"}</button></div>
+    ${results.length?`<ul class="results">${results.map((r,i)=>`<li><button data-act="pickResult" data-i="${i}">${esc(r.label)}</button></li>`).join("")}</ul>`:""}
+    <p class="small muted" style="margin-top:6px">Tip: press and hold the map to drop a stop anywhere.</p></div>`;
+  if (parkResults) h += parkHtml();
+  if (legs.length) h += `<div class="row"><button class="btn primary" data-act="startNav" ${done?"":"disabled"}>Start navigation</button>
+    <button class="btn" data-act="logTrip" ${done?"":"disabled"}>Save trip to log</button><button class="btn" data-act="fit">Show whole route</button>
+    ${clearArm?`<button class="btn danger" data-act="clearRoute">Tap again to clear</button>`:`<button class="btn" data-act="clearRouteArm">Clear route</button>`}</div>`;
+  el.innerHTML = h;
+  if (hadFocus){ const s=$("#search"); s.focus(); s.setSelectionRange(s.value.length,s.value.length); }
+}
+function legHtml(i){
+  const l = S.legs[i]; if (!l) return "";
+  const a=S.stops[i], b=S.stops[i+1];
+  let h = `<li class="leg ${l.mode}"><div class="row"><span class="seg"><button class="tm" data-act="mode" data-i="${i}" data-m="truck" aria-pressed="${l.mode==="truck"}">Truck</button><button class="cm" data-act="mode" data-i="${i}" data-m="car" aria-pressed="${l.mode==="car"}">Car</button></span>
+    <span class="legmeta num">${l.busy?"Routing…": l.route?`${l.route.mi.toFixed(1)} mi · ${fmtDur(l.route.s)}`: S.key?"":"Add your key to route"}</span></div>`;
+  if (l.err) h += `<div class="warn bad"><strong>${esc(l.err)}</strong><div class="row"><button class="btn sm" data-act="retry" data-i="${i}">Retry</button>${l.mode==="truck"?`<button class="btn sm" data-act="findPark" data-i="${i+1}">Find truck parking near ${letter(i+1)}</button>`:""}</div></div>`;
+  if (l.checking) h += `<div class="legmeta">Checking clearances and street rules…</div>`;
+  for (const w of l.warn||[]) h += `<div class="warn ${w.lvl}"><strong>${w.t}</strong>${w.d?esc(w.d):""}${w.sw && !b.park?`<div class="row"><button class="btn sm truck" data-act="findPark" data-i="${i+1}">Find truck parking & switch to car</button></div>`:""}</div>`;
+  if (l.mode==="truck" && l.clear){
+    const cs = l.clear.map(clearInfo).filter(Boolean).sort((x,y)=>x.in-y.in);
+    const low = cs.filter(c=>clearLevel(c.in)==="low");
+    if (low.length) h += `<div class="warn bad"><strong>Route passes ${low.length} mapped clearance${low.length>1?"s":""} lower than your rig.</strong>It may be on a road beside the route. Tap the sign to check it.</div>`;
+    if (cs.length) h += `<div class="chips">${cs.slice(0,12).map(c=>`<button class="chip ${clearLevel(c.in)}" data-act="goto" data-lat="${c.lat}" data-lng="${c.lng}" title="${esc(c.rel)}">${ftIn(c.in)}${c.relLvl?" ✓":""}</button>`).join("")}${cs.length>12?`<span class="small muted">+${cs.length-12} more</span>`:""}</div>`;
+    else if (!l.checking && l.route) h += `<div class="legmeta">No posted clearances mapped on this leg.</div>`;
+  }
+  if (l.route) h += `<a class="ext" href="https://www.google.com/maps/dir/?api=1&origin=${a.lat},${a.lng}&destination=${b.lat},${b.lng}&travelmode=driving" target="_blank" rel="noopener">Open leg in Google Maps${l.mode==="truck"?" (no truck limits)":""}</a>`;
+  return h + `</li>`;
+}
+let editingNote = null, clearArm = false, parkResults = null;
+function parkHtml(){
+  const p = parkResults;
+  let h = `<div class="callout"><div class="kv"><h2>Truck parking near ${esc(p.label)}</h2><button class="icon" data-act="closePark" aria-label="Close">✕</button></div>`;
+  if (p.busy) h += `<p class="muted">Searching map data within 5 miles…</p>`;
+  else if (p.err) h += `<p>${esc(p.err)}</p>`;
+  else if (!p.items.length) h += `<p class="muted">No truck parking, truck stops or rest areas are mapped within 5 miles. Press and hold the map to drop your own park stop.</p>`;
+  else h += `<ul class="list">${p.items.map((it,i)=>`<li><div class="kv"><div style="min-width:0"><div class="lbl">${esc(it.name)}</div><div class="small muted">${esc(it.kind)} · ${fmtMi(it.d*M2MI)} from stop</div></div>
+      <button class="btn sm truck" data-act="usePark" data-i="${i}">Park here</button></div></li>`).join("")}</ul>`;
+  return h + `</div>`;
+}
+async function findPark(stopIdx){
+  const s = S.stops[stopIdx]; if (!s) return;
+  parkResults = { idx: stopIdx, id: s.id, label: letter(stopIdx), busy: true, items: [] }; renderRoute(); layers.park.clearLayers();
+  try{
+    const r=8000;
+    const j = await overpass(`[out:json][timeout:25];(nwr(around:${r},${s.lat},${s.lng})["amenity"="parking"]["hgv"~"^(yes|designated)$"];nwr(around:${r},${s.lat},${s.lng})["amenity"="parking"]["parking"="truck"];nwr(around:${r},${s.lat},${s.lng})["highway"="rest_area"];nwr(around:${r},${s.lat},${s.lng})["highway"="services"];nwr(around:${r},${s.lat},${s.lng})["amenity"="fuel"]["hgv"~"^(yes|designated)$"];);out tags center 40;`);
+    const items = (j.elements||[]).map(e => { const p=elPt(e), t=e.tags||{};
+      const kind = t.amenity==="parking" ? "Truck parking" : t.highway==="rest_area" ? "Rest area" : t.highway==="services" ? "Service plaza" : "Truck fuel stop";
+      return { name: t.name || t.brand || t.operator || kind, kind, lat:p[0], lng:p[1], d: hav(p,[s.lat,s.lng]) }; })
+      .sort((a,b)=>a.d-b.d).slice(0,10);
+    parkResults.items = items;
+    items.forEach((it,i) => L.marker([it.lat,it.lng], { icon: L.divIcon({ className:"parkpoi", html:`<span>P</span>` }) })
+      .bindPopup(`<b>${esc(it.name)}</b><br>${esc(it.kind)}<div class="row"><button class="btn" data-act="usePark" data-i="${i}">Park here</button></div>`).addTo(layers.park));
+    if (items.length) map.fitBounds([[s.lat,s.lng], ...items.map(i=>[i.lat,i.lng])], { padding:[40,40], paddingBottomRight:[40, $("#sheet").getBoundingClientRect().height+20] });
+  }catch(e){ parkResults.err = e.message; }
+  parkResults.busy = false; renderRoute();
+}
+function usePark(i){
+  const p = parkResults; const it = p?.items[i]; if (!it) return;
+  const idx = S.stops.findIndex(s => s.id === p.id); if (idx < 0) return;
+  const stop = { id: uid(), label: it.name, lat: it.lat, lng: it.lng, park: true };
+  S.stops.splice(idx, 0, stop);
+  syncLegs(); const into = S.legs[idx-1], out = S.legs[idx];
+  if (into) into.mode = "truck"; if (out){ out.mode = "car"; invalidate(out); }
+  parkResults = null; layers.park.clearLayers(); map.closePopup();
+  toast(`Added ${it.name} as a park & switch stop. The last leg is now by car.`);
+  routeAll();
+}
+async function addStop(label, lat, lng, at){
+  const s = { id: uid(), label: label || `${lat.toFixed(5)}, ${lng.toFixed(5)}`, lat, lng, park: false };
+  if (at === 0) S.stops.unshift(s); else S.stops.push(s);
+  results = []; searchQ = "";
+  if (!label && S.key){ reverse(lat,lng).then(l => { if (l){ s.label = l; save(); renderRoute(); drawStops(); } }); }
+  const n = noteFor(s); if (n) toast(`Note for this address: ${n.text}`, 6000);
+  await routeAll(); if (S.stops.length===1) map.setView([lat,lng], 14);
+}
+let searchT;
+document.addEventListener("input", e => {
+  if (e.target.id === "search"){ searchQ = e.target.value; clearTimeout(searchT);
+    if (searchQ.trim().length < 3){ if (results.length){ results=[]; renderRoute(); } return; }
+    searchT = setTimeout(async () => { try{ results = await geocode(searchQ.trim()); }catch(err){ toast(err.message); results=[]; } renderRoute(); }, 350); }
+});
+
+/* ============ Rig tab ============ */
+function renderRig(){
+  if (tab !== "rig") return; const v = S.vehicle;
+  $("#p-rig").innerHTML = `<p class="muted small">Truck legs avoid roads posted below these limits. Car hauler: re-check height each load, since the top deck changes it.</p>
+  <label class="f">Rig name<input type="text" id="v-name" value="${esc(v.name)}"></label>
+  <div class="grid2"><label class="f">Height (ft)<input type="number" inputmode="numeric" id="v-hft" value="${Math.floor(v.heightIn/12)}"></label><label class="f">Height (in)<input type="number" inputmode="numeric" id="v-hin" value="${Math.round(v.heightIn%12)}"></label></div>
+  <div class="grid2"><label class="f">Gross weight (lb)<input type="number" inputmode="numeric" id="v-w" value="${v.weightLb}"></label><label class="f">Axle weight (lb)<input type="number" inputmode="numeric" id="v-ax" value="${v.axleLb}"></label></div>
+  <div class="grid2"><label class="f">Length (ft)<input type="number" inputmode="numeric" id="v-l" value="${v.lengthFt}"></label><label class="f">Width (in)<input type="number" inputmode="numeric" id="v-wd" value="${v.widthIn}"></label></div>
+  <label class="row" style="gap:10px"><input type="checkbox" id="v-hz" ${v.hazmat?"checked":""} style="width:22px;height:22px"> Hauling hazmat</label>
+  <div class="callout"><div class="kv"><span>Height used for clearances</span><b class="num">${ftIn(v.heightIn)}</b></div><div class="kv"><span>Weight</span><b class="num">${Number(v.weightLb||0).toLocaleString()} lb</b></div></div>
+  <button class="btn primary" data-act="saveRig">Save rig & reroute truck legs</button>`;
+}
+function saveRig(){
+  const n = id => parseFloat($(id).value) || 0; const v = S.vehicle;
+  v.name = $("#v-name").value.trim() || "My rig"; v.heightIn = n("#v-hft")*12 + n("#v-hin");
+  v.weightLb = n("#v-w"); v.axleLb = n("#v-ax"); v.lengthFt = n("#v-l"); v.widthIn = n("#v-wd"); v.hazmat = $("#v-hz").checked;
+  S.legs.forEach(l => { if (l.mode==="truck") invalidate(l); });
+  save(); renderRig(); drawClear(); toast("Rig saved. Rerouting truck legs."); routeAll();
+}
+
+/* ============ Clearances tab ============ */
+let reportDraft = null;
+function openReport(p, existing){
+  reportDraft = { lat:p[0], lng:p[1], osm: existing?.osm || null, id: existing?.id || null, heightIn: existing?.heightIn ?? null, note: existing?.note || "" };
+  showTab("clear"); setSheet("half");
+}
+function renderClear(){
+  if (tab !== "clear") return;
+  const v = S.vehicle; let h = "";
+  if (reportDraft){ const d = reportDraft;
+    h += `<div class="callout"><h2>${d.osm?"Correct this clearance":"Report a clearance"}</h2><p class="small muted num">${d.lat.toFixed(5)}, ${d.lng.toFixed(5)}</p>
+      <p class="small">Enter what the sign actually says.</p>
+      <div class="grid2"><label class="f">Feet<input type="number" inputmode="numeric" id="r-ft" value="${d.heightIn!=null?Math.floor(d.heightIn/12):""}"></label><label class="f">Inches<input type="number" inputmode="numeric" id="r-in" value="${d.heightIn!=null?Math.round(d.heightIn%12):""}"></label></div>
+      <label class="f">Note (optional)<input type="text" id="r-note" value="${esc(d.note)}" placeholder="Rail bridge, sign faded, etc."></label>
+      <div class="row"><button class="btn primary" data-act="saveReport">Save</button><button class="btn" data-act="cancelReport">Cancel</button></div></div>`;
+  }
+  const keys = new Set(); S.legs.forEach(l => l.mode==="truck" && (l.clear||[]).forEach(k=>keys.add(k)));
+  const onRoute = [...keys].map(clearInfo).filter(Boolean).sort((a,b)=>a.in-b.in);
+  h += `<div><h2>On this route</h2>`;
+  if (!S.legs.some(l=>l.mode==="truck"&&l.route)) h += `<p class="muted">Route a truck leg to see the clearances along it.</p>`;
+  else if (!onRoute.length) h += `<p class="muted">No posted clearances are mapped along your truck legs.</p>`;
+  else h += `<ul class="list">${onRoute.map(c=>`<li><div class="kv"><div style="min-width:0"><span class="chip ${clearLevel(c.in)}">${ftIn(c.in)}</span> <span class="small">${esc(c.name||"")}</span><div class="small muted">${esc(c.rel)}${clearLevel(c.in)==="low"?" · lower than your rig":clearLevel(c.in)==="tight"?" · within a foot of your rig":""}</div></div>
+      <button class="btn sm" data-act="goto" data-lat="${c.lat}" data-lng="${c.lng}">Show</button></div></li>`).join("")}</ul>`;
+  h += `</div><div class="callout"><h2>How sure is each number?</h2>
+    <p class="small"><b>Map data only</b>: from OpenStreetMap. Usually right, sometimes missing or out of date.</p>
+    <p class="small"><b>Confirmed by you</b>: you checked the sign and it matched.</p>
+    <p class="small"><b>Your report / correction</b>: you entered the sign's height. Truck legs steer around your reports lower than ${ftIn((v.heightIn||0)+3)} (your rig plus 3").</p>
+    <button class="btn truck" data-act="pickReport">Report a clearance on the map</button></div>`;
+  const mine = S.clearances.slice().sort((a,b)=>b.date-a.date);
+  h += `<div><h2>Your clearance records (${mine.length})</h2>`;
+  h += mine.length ? `<ul class="list">${mine.map(c=>`<li><div class="kv"><div style="min-width:0"><span class="chip ${clearLevel(c.heightIn)}">${ftIn(c.heightIn)}</span> <span class="small">${c.kind==="confirm"?"Confirmed":"Reported"} ${new Date(c.date).toLocaleDateString()}</span>${c.note?`<div class="small muted">${esc(c.note)}</div>`:""}</div>
+     <div class="row"><button class="btn sm" data-act="goto" data-lat="${c.lat}" data-lng="${c.lng}">Show</button><button class="btn sm" data-act="delClr" data-id="${c.id}">Remove</button></div></div></li>`).join("")}</ul>`
+    : `<p class="muted">None yet. Tap any yellow sign on the map to confirm or correct it.</p>`;
+  $("#p-clear").innerHTML = h + `</div>`;
+}
+function saveReport(){
+  const ft = parseFloat($("#r-ft").value), inch = parseFloat($("#r-in").value) || 0;
+  if (isNaN(ft) || ft <= 0){ toast("Enter the height in feet first."); return; }
+  const d = reportDraft; const heightIn = ft*12 + inch;
+  const rec = d.id ? S.clearances.find(c=>c.id===d.id) : null;
+  const data = { lat:d.lat, lng:d.lng, heightIn, note: $("#r-note").value.trim(), date: Date.now(), kind:"report", osm: d.osm };
+  if (rec) Object.assign(rec, data); else { S.clearances = S.clearances.filter(c => !(d.osm && c.osm===d.osm)); S.clearances.push({ id: uid(), ...data }); }
+  reportDraft = null; afterClearChange("Clearance saved.");
+}
+function afterClearChange(msg){
+  const lim = (S.vehicle.heightIn||0)+3; let reroute = false;
+  S.legs.forEach(l => { if (l.mode==="truck" && l.route){
+      if (S.clearances.some(c => !c.osm && c.heightIn < lim && distToLine([c.lat,c.lng], l.route.c) < 60)){ invalidate(l); reroute = true; }
+      else for (const c of S.clearances) if (!c.osm && distToLine([c.lat,c.lng], l.route.c) < 35){ l.clear = [...new Set([...(l.clear||[]), "u:"+c.id])]; } } });
+  save(); drawClear(); renderClear(); renderRoute(); map.closePopup(); if (msg) toast(msg + (reroute?" Rerouting around it.":""));
+  if (reroute) routeAll();
+}
+
+/* ============ Log tab ============ */
+let delArm = null;
+function logTrip(){
+  if (!S.legs.length || !S.legs.every(l=>l.route)) return;
+  const legs = S.legs.map(l => ({ from: stopById(l.from)?.label, to: stopById(l.to)?.label, mode: l.mode, mi: +l.route.mi.toFixed(2) }));
+  const truckMi = legs.filter(l=>l.mode==="truck").reduce((a,l)=>a+l.mi,0), carMi = legs.filter(l=>l.mode==="car").reduce((a,l)=>a+l.mi,0);
+  S.log.unshift({ id: uid(), date: Date.now(), stops: S.stops.map(s=>s.label), legs, truckMi:+truckMi.toFixed(2), carMi:+carMi.toFixed(2), odoStart:"", odoEnd:"", note:"" });
+  save(); toast("Trip saved to your log."); showTab("log");
+}
+function renderLog(){
+  if (tab !== "log") return;
+  const rate = parseFloat(S.settings.rate);
+  const months = {}; for (const t of S.log){ const k = new Date(t.date).toLocaleDateString(undefined,{year:"numeric",month:"long"}); (months[k] ||= { t:0, c:0, n:0 }); months[k].t+=t.truckMi; months[k].c+=t.carMi; months[k].n++; }
+  let h = `<div class="row"><label class="f grow">Mileage rate ($ per mile, optional)<input type="number" step="0.01" inputmode="decimal" id="rate" value="${esc(S.settings.rate)}" placeholder="Your employer's or the IRS rate"></label></div>`;
+  const mk = Object.keys(months);
+  if (mk.length) h += `<div><h2>By month</h2><ul class="list">${mk.map(k=>{const m=months[k], tot=m.t+m.c; return `<li><div class="kv"><b>${esc(k)}</b><span class="num">${tot.toFixed(1)} mi${!isNaN(rate)?` · $${(tot*rate).toFixed(2)}`:""}</span></div>
+     <div class="small muted num">${m.n} trip${m.n>1?"s":""} · truck ${m.t.toFixed(1)} mi · car ${m.c.toFixed(1)} mi</div></li>`}).join("")}</ul></div>`;
+  h += `<div><h2>Trips</h2>`;
+  if (!S.log.length) h += `<p class="muted">No trips yet. Plan a route, then tap "Save trip to log" or finish a navigation.</p>`;
+  else h += `<ul class="list">${S.log.map(t=>{ const odo = (parseFloat(t.odoEnd)-parseFloat(t.odoStart));
+    return `<li><div class="kv"><b>${new Date(t.date).toLocaleDateString(undefined,{weekday:"short",month:"short",day:"numeric"})}</b><span class="num">${(t.truckMi+t.carMi).toFixed(1)} mi</span></div>
+    <div class="small" style="overflow-wrap:anywhere">${t.stops.map(esc).join(" → ")}</div>
+    <div class="small muted num">Truck ${t.truckMi.toFixed(1)} mi · Car ${t.carMi.toFixed(1)} mi${!isNaN(odo)&&odo>0?` · Odometer ${odo.toFixed(1)} mi`:""}</div>
+    <div class="grid2" style="margin-top:8px"><label class="f">Odometer start<input type="number" inputmode="decimal" data-log="${t.id}" data-k="odoStart" value="${esc(t.odoStart)}"></label><label class="f">Odometer end<input type="number" inputmode="decimal" data-log="${t.id}" data-k="odoEnd" value="${esc(t.odoEnd)}"></label></div>
+    <label class="f" style="margin-top:8px">Note<input type="text" data-log="${t.id}" data-k="note" value="${esc(t.note)}" placeholder="Stock #, customer, reimbursement…"></label>
+    <div class="row" style="margin-top:8px">${delArm===t.id?`<button class="btn sm danger" data-act="delTrip" data-id="${t.id}">Tap again to delete</button>`:`<button class="btn sm" data-act="delTripArm" data-id="${t.id}">Delete</button>`}</div></li>`}).join("")}</ul>`;
+  h += `</div>`;
+  if (S.log.length) h += `<div class="row"><button class="btn primary" data-act="csv">Download CSV</button><button class="btn" data-act="csvCopy">Copy as CSV</button></div>`;
+  $("#p-log").innerHTML = h;
+}
+function csv(){
+  const q = v => `"${String(v??"").replace(/"/g,'""')}"`;
+  const rows = [["Date","Stops","Truck mi","Car mi","Total mi","Odometer start","Odometer end","Odometer mi","Note"]];
+  for (const t of S.log){ const o = parseFloat(t.odoEnd)-parseFloat(t.odoStart);
+    rows.push([new Date(t.date).toLocaleDateString(), t.stops.join(" -> "), t.truckMi, t.carMi, (t.truckMi+t.carMi).toFixed(2), t.odoStart, t.odoEnd, isNaN(o)?"":o.toFixed(1), t.note]); }
+  return rows.map(r => r.map(q).join(",")).join("\n");
+}
+function download(name, text, type){ const a=document.createElement("a"); a.href=URL.createObjectURL(new Blob([text],{type})); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},500); }
+
+/* ============ Settings tab ============ */
+let wipeArm = false;
+function renderSettings(){
+  if (tab !== "settings") return;
+  $("#p-settings").innerHTML = `<div><h2>Routing key</h2><p class="small muted">Free from <a class="ext" href="https://openrouteservice.org/dev/#/signup" target="_blank" rel="noopener">openrouteservice.org</a>. It stays on this device.</p>
+    <div class="row" style="margin-top:6px"><input class="grow" type="password" id="keyField" value="${esc(S.key)}" autocomplete="off" placeholder="Paste your API key"><button class="btn primary" data-act="saveKey">Save</button></div></div>
+  <label class="row" style="gap:10px"><input type="checkbox" id="voiceToggle" ${S.settings.voice?"checked":""} style="width:22px;height:22px"> Spoken directions</label>
+  <div class="callout"><h2>Your data</h2><p class="small">Notes, clearance reports, rig and trip log are saved in this browser only. Back them up now and then, and use the backup to move to a new phone.</p>
+    <div class="row"><button class="btn" data-act="backup">Download backup</button><label class="btn" style="display:inline-flex;align-items:center">Restore backup<input type="file" id="restore" accept="application/json,.json" hidden></label></div>
+    <div class="row">${wipeArm?`<button class="btn danger" data-act="wipe">Tap again to erase everything</button>`:`<button class="btn" data-act="wipeArm">Erase all data</button>`}</div></div>
+  <p class="small muted">Map and street data © OpenStreetMap contributors. Routing by openrouteservice. Truck routing is a planning aid. Always obey posted signs.</p>`;
+}
+
+/* ============ Navigation ============ */
+let N = null;
+function say(t){ if (!S.settings.voice || !("speechSynthesis" in window)) return; try{ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(t)); }catch(e){} }
+const ARROWS = {0:"←",1:"→",2:"↰",3:"↱",4:"↖",5:"↗",6:"↑",7:"↻",8:"↻",9:"⤺",10:"◉",11:"↑",12:"↖",13:"↗"};
+function spokenDist(m){ const mi=m*M2MI; if (mi < 0.2) return `${Math.round(mi*5280/50)*50} feet`; return `${mi.toFixed(1).replace(/\.0$/,"")} miles`; }
+function prepLeg(){ const C = S.legs[N.leg].route.c; N.cum=[0]; for (let i=1;i<C.length;i++) N.cum[i]=N.cum[i-1]+hav(C[i-1],C[i]); N.idx=0; N.said=new Set(); N.off=0;
+  const leg=S.legs[N.leg]; const b=stopById(leg.to);
+  $("#navtop").className = "navtop " + leg.mode;
+  $("#navMode").textContent = `${leg.mode==="truck"?"Truck":"Car"} leg ${N.leg+1} of ${S.legs.length} · to ${b?.label||""}`;
+  layers.nav.clearLayers(); N.me = L.marker(N.lastP || C[0], { icon: L.divIcon({className:"me", html:"<span></span>"}), zIndexOffset:1000 }).addTo(layers.nav);
+  const n = b && noteFor(b); if (n) toast(`Note for ${b.label}: ${n.text}`, 8000);
+}
+function startNav(){
+  if (!("geolocation" in navigator)){ toast("This browser can't share your location."); return; }
+  N = { leg: S.legs.findIndex(l=>l.route), follow:true, started: Date.now() }; if (N.leg<0) return;
+  try{ speechSynthesis?.speak(new SpeechSynthesisUtterance("")); }catch(e){}
+  $("#sheet").hidden = true; $("#navtop").hidden = false; $("#navbot").hidden = false;
+  $("#muteBtn").textContent = S.settings.voice ? "Voice on" : "Voice off";
+  prepLeg(); say(`Starting. ${S.legs[N.leg].mode} leg to ${stopById(S.legs[N.leg].to)?.label||"your stop"}.`);
+  navigator.wakeLock?.request("screen").then(w => N && (N.wake = w)).catch(()=>{});
+  N.watch = navigator.geolocation.watchPosition(navPos, err => toast(err.code===1 ? "Location is blocked. Allow location for this site in your browser settings." : "Waiting for a GPS signal…"), { enableHighAccuracy:true, maximumAge:1000, timeout:20000 });
+  map.on("dragstart", stopFollow);
+}
+function stopFollow(){ if (N) N.follow = false; }
+function navPos(pos){
+  if (!N || N.paused) return;
+  const p = [pos.coords.latitude, pos.coords.longitude]; N.lastP = p;
+  const leg = S.legs[N.leg], C = leg.route.c;
+  let best = Infinity, bi = N.idx; const lo = Math.max(0, N.idx-40), hi = Math.min(C.length-1, N.idx+600);
+  for (let i=lo;i<=hi;i++){ const d=hav(p,C[i]); if (d<best){best=d;bi=i;} }
+  if (best > 400){ for (let i=0;i<C.length;i++){ const d=hav(p,C[i]); if (d<best){best=d;bi=i;} } }
+  N.idx = bi; N.me.setLatLng(p);
+  if (N.follow) map.setView(p, Math.max(map.getZoom(), 16), { animate:true });
+  const b = stopById(leg.to);
+  if (hav(p,[b.lat,b.lng]) < 45 || (N.cum[C.length-1]-N.cum[bi] < 40 && best < 60)) return arrive();
+  if ((pos.coords.accuracy||0) < 80 && best > 75){ if (++N.off >= 3 && !N.rer) return navReroute(p); } else N.off = 0;
+  const st = leg.route.st.find(s => s.w > bi && s.type !== 11) || leg.route.st[leg.route.st.length-1];
+  const dm = Math.max(0, N.cum[st.w] - N.cum[bi]);
+  $("#navArrow").textContent = ARROWS[st.type] || "↑"; $("#navDist").textContent = fmtMi(dm*M2MI); $("#navInstr").textContent = st.t;
+  if (dm < 600 && dm > 150 && !N.said.has(st.w+"a")){ N.said.add(st.w+"a"); say(`In ${spokenDist(dm)}, ${st.t}`); }
+  if (dm <= 90 && !N.said.has(st.w+"b")){ N.said.add(st.w+"b"); N.said.add(st.w+"a"); say(st.t); }
+  const remLeg = N.cum[C.length-1]-N.cum[bi]; const rest = S.legs.slice(N.leg+1).reduce((a,l)=>a+(l.route?.mi||0),0);
+  const remMi = remLeg*M2MI + rest; const legFrac = N.cum[C.length-1] ? remLeg/N.cum[C.length-1] : 0;
+  const remS = leg.route.s*legFrac + S.legs.slice(N.leg+1).reduce((a,l)=>a+(l.route?.s||0),0);
+  $("#navRemain").textContent = `${remMi.toFixed(1)} mi`;
+  $("#navEta").textContent = `· arrive ${new Date(Date.now()+remS*1000).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})} · next stop ${fmtMi(remLeg*M2MI)}`;
+}
+async function navReroute(p){
+  N.rer = true; const leg = S.legs[N.leg], b = stopById(leg.to); say("Rerouting"); $("#navInstr").textContent = "Rerouting…";
+  try{ leg.route = packRoute(await orsRoute([[p[1],p[0]],[b.lng,b.lat]], leg.mode)); save(); drawRoutes(); prepLeg(); }
+  catch(e){ toast(e.message); }
+  N.rer = false; N.off = 0;
+}
+function arrive(){
+  const leg = S.legs[N.leg], b = stopById(leg.to); N.paused = true;
+  const next = S.legs[N.leg+1]; const last = !next;
+  say(last ? `You've arrived at ${b.label}. Trip complete.` : b.park ? `Arrived at ${b.label}. Park the rig here. The next leg is by car.` : `Arrived at ${b.label}.`);
+  const n = noteFor(b);
+  $("#arrival").innerHTML = `<h2>${last?"Trip complete":"Arrived"}</h2><div class="lbl" style="font-size:18px">${esc(b.label)}</div>
+    ${b.park?`<p><span class="tag park">PARK RIG HERE</span> Tap continue once you're in the car.</p>`:""}
+    ${n?`<div class="note">${esc(n.text)}</div>`:""}
+    <div class="row">${last?`<button class="btn primary" data-act="finishLog">Save trip to log</button><button class="btn" data-act="endNav">Done</button>`
+      :`<button class="btn primary" data-act="nextLeg">Continue: ${next.mode==="truck"?"truck":"car"} leg to ${esc(stopById(next.to)?.label||"")}</button><button class="btn" data-act="endNav">End</button>`}</div>`;
+  $("#arrival").hidden = false;
+}
+function nextLeg(){ $("#arrival").hidden = true; N.leg++; N.paused = false; prepLeg(); say(`${S.legs[N.leg].mode} leg to ${stopById(S.legs[N.leg].to)?.label||"your next stop"}.`); }
+function endNav(){
+  if (!N) return; navigator.geolocation.clearWatch(N.watch); try{ N.wake?.release(); }catch(e){} map.off("dragstart", stopFollow);
+  N = null; layers.nav.clearLayers(); $("#navtop").hidden = true; $("#navbot").hidden = true; $("#arrival").hidden = true; $("#sheet").hidden = false; speechSynthesis?.cancel?.();
+  fitAll();
+}
+
+/* ============ Actions ============ */
+const A = {
+  sheet: () => cycleSheet(),
+  saveKeyInline: () => { const v = $("#keyInline").value.trim(); if (!v) return; S.key = v; S.legs.forEach(l=>{ if (l.err) l.err=null; }); save(); toast("Key saved."); routeAll(); },
+  saveKey: () => { S.key = $("#keyField").value.trim(); S.legs.forEach(l=>{ if (l.err) l.err=null; }); save(); toast(S.key?"Key saved.":"Key removed."); routeAll(); },
+  pickResult: b => { const r = results[+b.dataset.i]; if (r) addStop(r.label, r.lat, r.lng); },
+  myLoc: () => { if (!navigator.geolocation){ toast("Location isn't available in this browser."); return; } toast("Finding you…", 2000);
+    navigator.geolocation.getCurrentPosition(p => addStop("My location", p.coords.latitude, p.coords.longitude, 0), () => toast("Couldn't get your location. Allow location for this site."), { enableHighAccuracy:true, timeout:15000 }); },
+  addHere: b => { map.closePopup(); addStop(null, +b.dataset.lat, +b.dataset.lng); },
+  reportHere: b => { map.closePopup(); openReport([+b.dataset.lat, +b.dataset.lng]); },
+  up: b => { const i=+b.dataset.i; if (i>0){ [S.stops[i-1],S.stops[i]]=[S.stops[i],S.stops[i-1]]; routeAll(); } },
+  down: b => { const i=+b.dataset.i; if (i<S.stops.length-1){ [S.stops[i+1],S.stops[i]]=[S.stops[i],S.stops[i+1]]; routeAll(); } },
+  rm: b => { S.stops.splice(+b.dataset.i,1); drawRoutes(); routeAll().then(drawRoutes); },
+  park: b => { const i=+b.dataset.i, s=S.stops[i]; s.park=!s.park; syncLegs(); const out=S.legs[i];
+    if (out){ out.mode = s.park ? "car" : (S.legs[i-1]?.mode || "truck"); invalidate(out); }
+    if (s.park) toast("Park & switch set. The leg after this stop is now by car."); routeAll(); },
+  mode: b => { const l=S.legs[+b.dataset.i]; if (!l || l.mode===b.dataset.m) return; l.mode=b.dataset.m; invalidate(l); drawRoutes(); routeAll(); },
+  retry: b => { const l=S.legs[+b.dataset.i]; if (l){ l.err=null; routeAll(); } },
+  note: b => { editingNote = b.dataset.id; renderRoute(); setTimeout(()=>$("#noteText")?.focus(),30); },
+  cancelNote: () => { editingNote=null; renderRoute(); },
+  saveNote: b => { const s=stopById(b.dataset.id), t=$("#noteText").value.trim(); const n=noteFor(s);
+    if (!t){ if (n) S.notes.splice(S.notes.indexOf(n),1); }
+    else if (n){ n.text=t; n.label=s.label; n.updated=Date.now(); } else S.notes.push({ id:uid(), lat:s.lat, lng:s.lng, label:s.label, text:t, updated:Date.now() });
+    editingNote=null; save(); renderRoute(); toast("Note saved. It'll show any time you route to this address."); },
+  delNote: b => { const n=noteFor(stopById(b.dataset.id)); if (n) S.notes.splice(S.notes.indexOf(n),1); editingNote=null; save(); renderRoute(); },
+  findPark: b => findPark(+b.dataset.i),
+  closePark: () => { parkResults=null; layers.park.clearLayers(); renderRoute(); },
+  usePark: b => usePark(+b.dataset.i),
+  goto: b => { map.setView([+b.dataset.lat,+b.dataset.lng], 17); setSheet("min"); },
+  fit: () => fitAll(),
+  clearRouteArm: () => { clearArm=true; renderRoute(); setTimeout(()=>{ clearArm=false; renderRoute(); }, 4000); },
+  clearRoute: () => { S.stops=[]; S.legs=[]; clearArm=false; parkResults=null; layers.park.clearLayers(); save(); drawStops(); drawRoutes(); renderRoute(); },
+  saveRig: () => saveRig(),
+  pickReport: () => startPick("report", "Tap where the low clearance is"),
+  cancelPick: () => { endPick(); setSheet("half"); },
+  confirmClr: b => { const k=b.dataset.key, o=S.osm[k]; if (!o) return; S.clearances = S.clearances.filter(c=>c.osm!==k);
+    S.clearances.push({ id:uid(), osm:k, lat:o.lat, lng:o.lng, heightIn:o.in, kind:"confirm", date:Date.now(), note:"" }); afterClearChange("Marked as confirmed."); },
+  correctClr: b => { const c = clearInfo(b.dataset.key); if (!c) return; map.closePopup();
+    if (b.dataset.key.startsWith("u:")) openReport([c.lat,c.lng], c.own); else openReport([c.lat,c.lng], { osm:b.dataset.key, id:c.own?.id, heightIn:c.in, note:c.note }); },
+  delClr: b => { S.clearances = S.clearances.filter(c=>c.id!==b.dataset.id); S.legs.forEach(l=>{ if (l.clear) l.clear=l.clear.filter(k=>k!=="u:"+b.dataset.id); }); afterClearChange("Removed."); },
+  saveReport: () => saveReport(),
+  cancelReport: () => { reportDraft=null; renderClear(); },
+  logTrip: () => logTrip(),
+  finishLog: () => { endNav(); logTrip(); },
+  delTripArm: b => { delArm=b.dataset.id; renderLog(); setTimeout(()=>{ if (delArm===b.dataset.id){ delArm=null; renderLog(); } }, 4000); },
+  delTrip: b => { S.log=S.log.filter(t=>t.id!==b.dataset.id); delArm=null; save(); renderLog(); },
+  csv: () => download(`switchroute-log-${new Date().toISOString().slice(0,10)}.csv`, csv(), "text/csv"),
+  csvCopy: () => { navigator.clipboard?.writeText(csv()).then(()=>toast("Copied. Paste it into a spreadsheet."), ()=>toast("Couldn't copy here. Use Download CSV.")); },
+  backup: () => download(`switchroute-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(S), "application/json"),
+  wipeArm: () => { wipeArm=true; renderSettings(); setTimeout(()=>{ wipeArm=false; renderSettings(); }, 4000); },
+  wipe: () => { const key=S.key; S=structuredClone(DEFAULTS); S.key=key; wipeArm=false; save(); drawStops(); drawRoutes(); drawClear(); renderSettings(); toast("All data erased. Your key was kept."); },
+  startNav: () => startNav(),
+  recenter: () => { if (N){ N.follow=true; if (N.lastP) map.setView(N.lastP, 17); } },
+  mute: b => { S.settings.voice=!S.settings.voice; save(); b.textContent = S.settings.voice?"Voice on":"Voice off"; if (!S.settings.voice) speechSynthesis?.cancel?.(); },
+  endNav: () => endNav(),
+  nextLeg: () => nextLeg(),
+};
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-tab]"); if (t){ showTab(t.dataset.tab); return; }
+  const b = e.target.closest("[data-act]"); if (!b || b.disabled) return;
+  const f = A[b.dataset.act]; if (f){ e.preventDefault(); f(b, e); }
+});
+document.addEventListener("change", e => {
+  const t = e.target;
+  if (t.dataset.log){ const trip = S.log.find(x=>x.id===t.dataset.log); if (trip){ trip[t.dataset.k] = t.value; save(); if (t.dataset.k!=="note") renderLog(); } }
+  if (t.id === "rate"){ S.settings.rate = t.value; save(); renderLog(); }
+  if (t.id === "voiceToggle"){ S.settings.voice = t.checked; save(); }
+  if (t.id === "restore" && t.files[0]){ const r=new FileReader(); r.onload=()=>{ try{ const j=JSON.parse(r.result); if (!j || !Array.isArray(j.stops)) throw 0;
+      localStorage.setItem(LS, JSON.stringify(j)); S=load(); drawStops(); drawRoutes(); drawClear(); renderSettings(); toast("Backup restored."); }catch(e){ toast("That file isn't a SwitchRoute backup."); } }; r.readAsText(t.files[0]); }
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.id === "search" && results[0]){ e.preventDefault(); addStop(results[0].label, results[0].lat, results[0].lng); }
+  if (e.key === "Enter" && e.target.id === "keyInline") A.saveKeyInline();
+});
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener?.("change", drawRoutes);
+
+/* ============ Boot ============ */
+syncLegs(); drawStops(); drawRoutes(); drawClear(); renderRoute();
+if (S.stops.length) setTimeout(fitAll, 50);
+if (S.legs.some(l => !l.route)) routeAll();
+</script>
+</body>
+</html>
